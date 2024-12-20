@@ -14,14 +14,10 @@ export default function MeshGradient(props) {
         const canvas = canvasRef.current
         if (!canvas) return
 
-        // Initialize MiniGl
         const gl = canvas.getContext("webgl")
         if (!gl) {
             console.error("WebGL not supported.")
             return
-        }
-        if (gl) {
-            console.log("we got GL")
         }
 
         const miniGl = new MiniGl(gl)
@@ -29,7 +25,7 @@ export default function MeshGradient(props) {
         miniGl.setColors(baseColor, colors)
 
         const render = () => {
-            miniGl.render()
+            miniGl.render(baseColor)
             requestAnimationFrame(render)
         }
         render()
@@ -37,7 +33,7 @@ export default function MeshGradient(props) {
         const handleResize = () => {
             miniGl.resize(canvas)
         }
-        handleResize() // Initial resize
+        handleResize()
         window.addEventListener("resize", handleResize)
 
         return () => {
@@ -52,19 +48,17 @@ export default function MeshGradient(props) {
             style={{
                 width: "100%",
                 height: "100%",
-                // backgroundColor: "blue",
                 display: "block",
             }}
         />
     )
 }
 
-// MiniGl class embedded directly in the file
 class MiniGl {
     constructor(gl) {
         this.gl = gl
         this.program = null
-        this.uniforms = {}
+        this.uniforms = null
         this.vertexBuffer = null
     }
 
@@ -79,17 +73,19 @@ class MiniGl {
 
         const fragmentShaderSource = `
             precision mediump float;
-            uniform float u_time;
+
             uniform vec2 u_resolution;
             uniform vec3 u_colors[5];
+            uniform vec2 u_positions[5];
 
             void main() {
-                vec2 uv = gl_FragCoord.xy / u_resolution;
+                vec2 uv = gl_FragCoord.xy / u_resolution; // Normalize UV coordinates
                 vec3 color = vec3(0.0);
 
+                // Blend colors based on distance to defined positions
                 for (int i = 0; i < 5; i++) {
-                    float dist = distance(uv, vec2(float(i) / 5.0, float(i) / 5.0));
-                    color += u_colors[i] * (1.0 - smoothstep(0.2, 0.5, dist));
+                    float dist = distance(uv, u_positions[i]);
+                    color += u_colors[i] * (1.0 - smoothstep(0.1, 0.5, dist));
                 }
 
                 gl_FragColor = vec4(color, 1.0);
@@ -107,15 +103,15 @@ class MiniGl {
         this.program = this.createProgram(vertexShader, fragmentShader)
 
         this.uniforms = {
-            time: this.gl.getUniformLocation(this.program, "u_time"),
             resolution: this.gl.getUniformLocation(
                 this.program,
                 "u_resolution"
             ),
             colors: this.gl.getUniformLocation(this.program, "u_colors"),
+            positions: this.gl.getUniformLocation(this.program, "u_positions"),
         }
 
-        // Set up a full-screen quad
+        // Full-screen quad
         const vertices = new Float32Array([
             -1,
             -1, // Bottom-left
@@ -134,7 +130,6 @@ class MiniGl {
         this.vertexBuffer = this.gl.createBuffer()
         this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.vertexBuffer)
         this.gl.bufferData(this.gl.ARRAY_BUFFER, vertices, this.gl.STATIC_DRAW)
-        this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null)
 
         const positionLocation = this.gl.getAttribLocation(
             this.program,
@@ -178,25 +173,39 @@ class MiniGl {
     }
 
     setColors(baseColor, colors) {
-        const rgbBase = hexToRgb(baseColor)
-        const colorArray = colors.map((color) => {
-            const rgb = hexToRgb(color.color)
+        this.gl.useProgram(this.program)
+        // Colors
+        const colorArray = colors.map((c) => {
+            const rgb = parseRgbString(c.color)
             return [rgb.r / 255, rgb.g / 255, rgb.b / 255]
         })
-
-        const fullColorArray = [
-            [rgbBase.r / 255, rgbBase.g / 255, rgbBase.b / 255],
-            ...colorArray.slice(0, 4), // Support up to 5 colors max
-        ]
-
-        while (fullColorArray.length < 5) {
-            fullColorArray.push([0, 0, 0]) // Fill remaining with black
-        }
-
-        const flattenedColors = fullColorArray.flat()
+        const fullColors = [
+            ...colorArray,
+            [1, 0, 0],
+            [0, 1, 0],
+            [0, 0, 1],
+            [1, 1, 0],
+            [1, 0, 1],
+        ].slice(0, 5)
+        const flattenedColors = fullColors.flat()
         this.gl.uniform3fv(
             this.uniforms.colors,
             new Float32Array(flattenedColors)
+        )
+
+        // Positions
+        const positions = colors.map((c) => [c.x / 100, 1 - c.y / 100])
+        const fullPositions = [
+            ...positions,
+            [0.5, 0.5],
+            [0.25, 0.25],
+            [0.75, 0.75],
+            [0.5, 0.75],
+        ].slice(0, 5)
+        const flattenedPositions = fullPositions.flat()
+        this.gl.uniform2fv(
+            this.uniforms.positions,
+            new Float32Array(flattenedPositions)
         )
     }
 
@@ -204,27 +213,27 @@ class MiniGl {
         const ratio = window.devicePixelRatio || 1
         canvas.width = canvas.clientWidth * ratio
         canvas.height = canvas.clientHeight * ratio
-        this.gl.viewport(
-            0,
-            0,
-            this.gl.drawingBufferWidth,
-            this.gl.drawingBufferHeight
-        )
+        this.gl.viewport(0, 0, canvas.width, canvas.height)
     }
 
-    render() {
-        const time = performance.now() / 1000
+    render(baseColor) {
+        this.gl.useProgram(this.program)
 
-        this.gl.clearColor(0.0, 0.0, 0.0, 0.0)
+        // Parse baseColor into RGB and normalize
+        const { r, g, b } = parseRgbString(baseColor) // Assuming `baseColor` is "rgb(r, g, b)"
+        this.gl.clearColor(r / 255, g / 255, b / 255, 1.0) // Set the clear color based on `baseColor`
+
         this.gl.clear(this.gl.COLOR_BUFFER_BIT)
-        this.gl.uniform1f(this.uniforms.time, time)
+
+        // Set resolution uniform
         this.gl.uniform2f(
             this.uniforms.resolution,
             this.gl.drawingBufferWidth,
             this.gl.drawingBufferHeight
         )
 
-        this.gl.drawArrays(this.gl.TRIANGLES, 0, 6) // Draw the quad
+        // Draw the full-screen quad
+        this.gl.drawArrays(this.gl.TRIANGLES, 0, 6)
     }
 
     dispose() {
@@ -233,21 +242,27 @@ class MiniGl {
     }
 }
 
-// Utility: Convert hex color to RGB
-function hexToRgb(hex) {
-    const bigint = parseInt(hex.replace("#", ""), 16)
-    const r = (bigint >> 16) & 255
-    const g = (bigint >> 8) & 255
-    const b = bigint & 255
-    return { r, g, b }
+// Utility: Read the RGB color value
+function parseRgbString(rgbString) {
+    const match = rgbString.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/)
+    if (!match) {
+        console.error(`Invalid RGB string: ${rgbString}`)
+        return { r: 0, g: 0, b: 0 } // Default to black if parsing fails
+    }
+
+    return {
+        r: parseInt(match[1], 10), // Red component
+        g: parseInt(match[2], 10), // Green component
+        b: parseInt(match[3], 10), // Blue component
+    }
 }
 
 MeshGradient.defaultProps = {
     baseColor: "#FFFFFF",
     colors: [
-        { color: "#FF0000", x: 40, y: 20 },
-        { color: "#00FF00", x: 80, y: 0 },
-        { color: "#0000FF", x: 22, y: 37 },
+        { color: "#FF0000", x: 20, y: 20 },
+        { color: "#00FF00", x: 80, y: 20 },
+        { color: "#0000FF", x: 50, y: 80 },
     ],
 }
 
@@ -285,10 +300,5 @@ addPropertyControls(MeshGradient, {
                 },
             },
         },
-        defaultValue: [
-            { color: "#FF0000", x: 40, y: 20 },
-            { color: "#00FF00", x: 80, y: 0 },
-            { color: "#0000FF", x: 22, y: 37 },
-        ],
     },
 })
