@@ -21,12 +21,12 @@ export default function MeshGradient(props) {
         }
 
         const miniGl = new MiniGl(gl)
-        miniGl.initShaders(colors.length) // Pass number of colors
+        miniGl.initShaders(colors.length)
         miniGl.setColors(baseColor, colors)
 
         const handleResize = () => {
             miniGl.resize(canvas)
-            miniGl.render() // Render only when resized
+            miniGl.render()
         }
 
         handleResize()
@@ -71,17 +71,17 @@ class MiniGl {
             precision mediump float;
 
             uniform vec2 u_resolution;
-            uniform vec3 u_baseColor;
-            uniform vec3 u_colors[${numColors}];
+            uniform vec4 u_baseColor; // Background color with alpha
+            uniform vec4 u_colors[${numColors}];
             uniform vec2 u_positions[${numColors}];
 
-            vec3 blendAverage(vec3 base, vec3 blend) {
+            vec4 blendAverage(vec4 base, vec4 blend) {
                 return (base + blend) / 2.0;
             }
 
             void main() {
                 vec2 uv = gl_FragCoord.xy / u_resolution;
-                vec3 color = u_baseColor;
+                vec4 color = u_baseColor;
 
                 for (int i = 0; i < ${numColors}; i++) {
                     float dist = distance(uv, u_positions[i]);
@@ -89,7 +89,7 @@ class MiniGl {
                     color = mix(color, blendAverage(color, u_colors[i]), weight);
                 }
 
-                gl_FragColor = vec4(color, 1.0);
+                gl_FragColor = color;
             }
         `
 
@@ -114,18 +114,7 @@ class MiniGl {
         }
 
         const vertices = new Float32Array([
-            -1,
-            -1,
-            1,
-            -1,
-            -1,
-            1, // Triangle 1
-            -1,
-            1,
-            1,
-            -1,
-            1,
-            1, // Triangle 2
+            -1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1,
         ])
 
         this.vertexBuffer = this.gl.createBuffer()
@@ -150,22 +139,22 @@ class MiniGl {
     setColors(baseColor, colors) {
         this.gl.useProgram(this.program)
 
-// Set the background color
-        const { r, g, b } = parseRgbString(baseColor)
-        this.gl.uniform3f(this.uniforms.baseColor, r / 255, g / 255, b / 255)
+        // Parse base color
+        const { r, g, b, a } = parseRgbaString(baseColor)
+        this.gl.uniform4f(this.uniforms.baseColor, r / 255, g / 255, b / 255, a)
 
-// Set the gradient colors
+        // Parse gradient colors
         const colorArray = colors.map((c) => {
-            const rgb = parseRgbString(c.color)
-            return [rgb.r / 255, rgb.g / 255, rgb.b / 255]
+            const rgba = parseRgbaString(c.color)
+            return [rgba.r / 255, rgba.g / 255, rgba.b / 255, rgba.a]
         })
         const flattenedColors = colorArray.flat()
-        this.gl.uniform3fv(
+        this.gl.uniform4fv(
             this.uniforms.colors,
             new Float32Array(flattenedColors)
         )
 
-// Set the positions
+        // Parse positions
         const positions = colors.map((c) => [c.x / 100, 1 - c.y / 100])
         const flattenedPositions = positions.flat()
         this.gl.uniform2fv(
@@ -201,10 +190,17 @@ class MiniGl {
 
     createShader(type, source) {
         const shader = this.gl.createShader(type)
+        if (!shader) {
+            console.error("Failed to create shader of type:", type)
+            return null
+        }
         this.gl.shaderSource(shader, source)
         this.gl.compileShader(shader)
         if (!this.gl.getShaderParameter(shader, this.gl.COMPILE_STATUS)) {
-            console.error(this.gl.getShaderInfoLog(shader))
+            console.error(
+                "Shader compilation failed:",
+                this.gl.getShaderInfoLog(shader)
+            )
             this.gl.deleteShader(shader)
             return null
         }
@@ -226,17 +222,19 @@ class MiniGl {
     }
 }
 
-function parseRgbString(rgbString) {
-        const match = rgbString.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/)
+function parseRgbaString(rgbaString) {
+    const match = rgbaString.match(
+        /rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([01](?:\.\d+)?))?\)/
+    )
     if (!match) {
-        console.error(`Invalid RGB string: ${rgbString}`)
-        return { r: 0, g: 0, b: 0 }
+        console.error(`Invalid color string: ${rgbaString}`)
+        return { r: 0, g: 0, b: 0, a: 1 }
     }
-
     return {
         r: parseInt(match[1], 10),
         g: parseInt(match[2], 10),
         b: parseInt(match[3], 10),
+        a: match[4] !== undefined ? parseFloat(match[4]) : 1,
     }
 }
 
