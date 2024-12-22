@@ -1,5 +1,13 @@
 import { addPropertyControls, ControlType } from "framer"
 import React, { useRef, useEffect } from "react"
+import {
+    createBufferInfoFromArrays,
+    createProgramInfo,
+    drawBufferInfo,
+    resizeCanvasToDisplaySize,
+    setBuffersAndAttributes,
+    setUniforms,
+} from "twgl.js"
 
 /** @framerDisableUnlink
  * @framerSupportedLayoutWidth any
@@ -7,36 +15,133 @@ import React, { useRef, useEffect } from "react"
  */
 
 export default function MeshGradient(props) {
-    const { baseColor, colors } = props
-    const canvasRef = useRef(null)
+    const { baseColor, colors, animate } = props
 
-    useEffect(() => {
-        const canvas = canvasRef.current
-        if (!canvas) return
+    const canvasRef = (element: HTMLCanvasElement) => {
+        if (!element) return
 
-        const gl = canvas.getContext("webgl")
+        const gl = element.getContext("webgl")
         if (!gl) {
             console.error("WebGL not supported.")
             return
         }
 
-        const miniGl = new MiniGl(gl)
-        miniGl.initShaders(colors.length)
-        miniGl.setColors(baseColor, colors)
+        const vertexShaderSource = `
+                attribute vec4 position;
 
-        const handleResize = () => {
-            miniGl.resize(canvas)
-            miniGl.render()
+                void main() {
+                    gl_Position = position;
+                }
+            `
+
+        const fragmentShaderSource = `
+                precision mediump float;
+
+                uniform vec2 u_resolution;
+                uniform vec4 u_baseColor; // Background color with alpha
+                uniform vec4 u_colors[${colors.length}];
+                uniform vec2 u_positions[${colors.length}];
+
+                vec4 blendAverage(vec4 base, vec4 blend) {
+                    return (base + blend) / 2.0;
+                }
+
+                void main() {
+                    vec2 uv = gl_FragCoord.xy / u_resolution;
+                    vec4 color = u_baseColor;
+
+                    for (int i = 0; i < ${colors.length}; i++) {
+                        float dist = distance(uv, u_positions[i]);
+                        float weight = 1.0 - smoothstep(0.1, 0.5, dist);
+                        color = mix(color, blendAverage(color, u_colors[i]), weight);
+                    }
+
+                    gl_FragColor = color;
+                }
+            `
+
+        const vertexShader = compileShader(
+            gl,
+            gl.VERTEX_SHADER,
+            vertexShaderSource
+        )
+        const fragmentShader = compileShader(
+            gl,
+            gl.FRAGMENT_SHADER,
+            fragmentShaderSource
+        )
+
+        function compileShader(gl, type, source) {
+            const shader = gl.createShader(type)
+            gl.shaderSource(shader, source)
+            gl.compileShader(shader)
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                console.error(
+                    "Shader compile error:",
+                    gl.getShaderInfoLog(shader)
+                )
+                return null
+            }
+            return shader
         }
 
-        handleResize()
-        window.addEventListener("resize", handleResize)
+        const programInfo = createProgramInfo(gl, [
+            vertexShaderSource,
+            fragmentShaderSource,
+        ])
 
-        return () => {
-            window.removeEventListener("resize", handleResize)
-            miniGl.dispose()
+        const arrays = {
+            position: [
+                -1, -1, 0, 1, -1, 0, -1, 1, 0, -1, 1, 0, 1, -1, 0, 1, 1, 0,
+            ],
         }
-    }, [baseColor, colors])
+        const bufferInfo = createBufferInfoFromArrays(gl, arrays)
+
+        function render(time: number) {
+            if (!gl?.canvas) return
+
+            // Resize canvas
+            resizeCanvasToDisplaySize(gl.canvas as HTMLCanvasElement)
+            gl.viewport(0, 0, gl.canvas.width, gl.canvas.height)
+
+            const uBaseColor = parseRgbaString(baseColor)
+
+            // Parse gradient colors
+            const colorArray = colors.map((c) => {
+                const rgba = parseRgbaString(c.color)
+                return [rgba.r / 255, rgba.g / 255, rgba.b / 255, rgba.a]
+            })
+            const flattenedColors = colorArray.flat()
+
+            // Animate positions over time
+            const positions = colors.map((c, i) => {
+                const offset = animate ? 0 : Math.sin(time * 0.001 + i) * 0.1 // Add oscillation
+                return [c.x / 100 + offset, 1 - c.y / 100 + offset]
+            })
+            const flattenedPositions = positions.flat()
+
+            const uniforms = {
+                u_resolution: [gl.canvas.width, gl.canvas.height],
+                u_baseColor: [
+                    uBaseColor.r / 255,
+                    uBaseColor.g / 255,
+                    uBaseColor.b / 255,
+                    uBaseColor.a,
+                ],
+                u_colors: new Float32Array(flattenedColors),
+                u_positions: new Float32Array(flattenedPositions),
+            }
+
+            gl.useProgram(programInfo.program)
+            setBuffersAndAttributes(gl, programInfo, bufferInfo)
+            setUniforms(programInfo, uniforms)
+            drawBufferInfo(gl, bufferInfo)
+
+            requestAnimationFrame(render)
+        }
+
+        requestAnimationFrame(render)
+    }
 
     return (
         <canvas
@@ -48,178 +153,6 @@ export default function MeshGradient(props) {
             }}
         />
     )
-}
-
-class MiniGl {
-    constructor(gl) {
-        this.gl = gl
-        this.program = null
-        this.uniforms = null
-        this.vertexBuffer = null
-    }
-
-    initShaders(numColors) {
-        const vertexShaderSource = `
-            attribute vec2 a_position;
-
-            void main() {
-                gl_Position = vec4(a_position, 0.0, 1.0);
-            }
-        `
-
-        const fragmentShaderSource = `
-            precision mediump float;
-
-            uniform vec2 u_resolution;
-            uniform vec4 u_baseColor; // Background color with alpha
-            uniform vec4 u_colors[${numColors}];
-            uniform vec2 u_positions[${numColors}];
-
-            vec4 blendAverage(vec4 base, vec4 blend) {
-                return (base + blend) / 2.0;
-            }
-
-            void main() {
-                vec2 uv = gl_FragCoord.xy / u_resolution;
-                vec4 color = u_baseColor;
-
-                for (int i = 0; i < ${numColors}; i++) {
-                    float dist = distance(uv, u_positions[i]);
-                    float weight = 1.0 - smoothstep(0.1, 0.5, dist);
-                    color = mix(color, blendAverage(color, u_colors[i]), weight);
-                }
-
-                gl_FragColor = color;
-            }
-        `
-
-        const vertexShader = this.createShader(
-            this.gl.VERTEX_SHADER,
-            vertexShaderSource
-        )
-        const fragmentShader = this.createShader(
-            this.gl.FRAGMENT_SHADER,
-            fragmentShaderSource
-        )
-        this.program = this.createProgram(vertexShader, fragmentShader)
-
-        this.uniforms = {
-            resolution: this.gl.getUniformLocation(
-                this.program,
-                "u_resolution"
-            ),
-            baseColor: this.gl.getUniformLocation(this.program, "u_baseColor"),
-            colors: this.gl.getUniformLocation(this.program, "u_colors"),
-            positions: this.gl.getUniformLocation(this.program, "u_positions"),
-        }
-
-        const vertices = new Float32Array([
-            -1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1,
-        ])
-
-        this.vertexBuffer = this.gl.createBuffer()
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.vertexBuffer)
-        this.gl.bufferData(this.gl.ARRAY_BUFFER, vertices, this.gl.STATIC_DRAW)
-
-        const positionLocation = this.gl.getAttribLocation(
-            this.program,
-            "a_position"
-        )
-        this.gl.enableVertexAttribArray(positionLocation)
-        this.gl.vertexAttribPointer(
-            positionLocation,
-            2,
-            this.gl.FLOAT,
-            false,
-            0,
-            0
-        )
-    }
-
-    setColors(baseColor, colors) {
-        this.gl.useProgram(this.program)
-
-        // Parse base color
-        const { r, g, b, a } = parseRgbaString(baseColor)
-        this.gl.uniform4f(this.uniforms.baseColor, r / 255, g / 255, b / 255, a)
-
-        // Parse gradient colors
-        const colorArray = colors.map((c) => {
-            const rgba = parseRgbaString(c.color)
-            return [rgba.r / 255, rgba.g / 255, rgba.b / 255, rgba.a]
-        })
-        const flattenedColors = colorArray.flat()
-        this.gl.uniform4fv(
-            this.uniforms.colors,
-            new Float32Array(flattenedColors)
-        )
-
-        // Parse positions
-        const positions = colors.map((c) => [c.x / 100, 1 - c.y / 100])
-        const flattenedPositions = positions.flat()
-        this.gl.uniform2fv(
-            this.uniforms.positions,
-            new Float32Array(flattenedPositions)
-        )
-    }
-
-    resize(canvas) {
-        const ratio = window.devicePixelRatio || 1
-        canvas.width = canvas.clientWidth * ratio
-        canvas.height = canvas.clientHeight * ratio
-        this.gl.viewport(0, 0, canvas.width, canvas.height)
-    }
-
-    render() {
-        this.gl.useProgram(this.program)
-        this.gl.clear(this.gl.COLOR_BUFFER_BIT)
-
-        this.gl.uniform2f(
-            this.uniforms.resolution,
-            this.gl.drawingBufferWidth,
-            this.gl.drawingBufferHeight
-        )
-
-        this.gl.drawArrays(this.gl.TRIANGLES, 0, 6)
-    }
-
-    dispose() {
-        this.gl.deleteProgram(this.program)
-        this.gl.deleteBuffer(this.vertexBuffer)
-    }
-
-    createShader(type, source) {
-        const shader = this.gl.createShader(type)
-        if (!shader) {
-            console.error("Failed to create shader of type:", type)
-            return null
-        }
-        this.gl.shaderSource(shader, source)
-        this.gl.compileShader(shader)
-        if (!this.gl.getShaderParameter(shader, this.gl.COMPILE_STATUS)) {
-            console.error(
-                "Shader compilation failed:",
-                this.gl.getShaderInfoLog(shader)
-            )
-            this.gl.deleteShader(shader)
-            return null
-        }
-        return shader
-    }
-
-    createProgram(vertexShader, fragmentShader) {
-        const program = this.gl.createProgram()
-        this.gl.attachShader(program, vertexShader)
-        this.gl.attachShader(program, fragmentShader)
-        this.gl.linkProgram(program)
-        if (!this.gl.getProgramParameter(program, this.gl.LINK_STATUS)) {
-            console.error(this.gl.getProgramInfoLog(program))
-            this.gl.deleteProgram(program)
-            return null
-        }
-        this.gl.useProgram(program)
-        return program
-    }
 }
 
 function parseRgbaString(rgbaString) {
@@ -245,6 +178,7 @@ MeshGradient.defaultProps = {
         { color: "#00FF00", x: 80, y: 20 },
         { color: "#0000FF", x: 50, y: 80 },
     ],
+    animate: false,
 }
 
 addPropertyControls(MeshGradient, {
@@ -281,5 +215,10 @@ addPropertyControls(MeshGradient, {
                 },
             },
         },
+    },
+    animate: {
+        title: "Animate",
+        type: ControlType.Boolean,
+        defaultValue: false,
     },
 })
