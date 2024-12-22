@@ -42,6 +42,11 @@ export default function MeshGradient(props) {
                 uniform vec4 u_colors[${colors.length}];
                 uniform vec2 u_positions[${colors.length}];
 
+                // Simple pseudo-random function
+                float random(vec2 st) {
+                    return fract(sin(dot(st.xy, vec2(12.9898, 78.233))) * 43758.5453123);
+                }
+
                 vec4 blendAverage(vec4 base, vec4 blend) {
                     return (base + blend) / 2.0;
                 }
@@ -51,9 +56,22 @@ export default function MeshGradient(props) {
                     vec4 color = u_baseColor;
 
                     for (int i = 0; i < ${colors.length}; i++) {
-                        float dist = distance(uv, u_positions[i]);
-                        float weight = 1.0 - smoothstep(0.1, 0.5, dist);
-                        color = mix(color, blendAverage(color, u_colors[i]), weight);
+                        vec2 position = u_positions[i];
+                        vec4 gradientColor = u_colors[i];
+
+                        // Gaussian weights for blurring with added randomness
+                        for (float dx = -2.0; dx <= 2.0; dx++) {
+                            for (float dy = -2.0; dy <= 2.0; dy++) {
+                                // Add randomness to the sampling position
+                                float randX = random(uv + vec2(dx, dy)) * 0.02; // Adjust randomness scale
+                                float randY = random(uv - vec2(dx, dy)) * 0.02;
+
+                                vec2 samplePos = position + vec2(dx + randX, dy + randY) * 0.005; // Adjust blur radius
+                                float dist = distance(uv, samplePos);
+                                float weight = 1.0 - smoothstep(0.1, 0.5, dist);
+                                color = mix(color, blendAverage(color, gradientColor), weight * 0.05);
+                            }
+                        }
                     }
 
                     gl_FragColor = color;
@@ -115,7 +133,7 @@ export default function MeshGradient(props) {
 
             // Animate positions over time
             const positions = colors.map((c, i) => {
-                const offset = animate ? 0 : Math.sin(time * 0.001 + i) * 0.1 // Add oscillation
+                const offset = !animate ? 0 : Math.sin(time * 0.001 + i) * 0.1 // Add oscillation
                 return [c.x / 100 + offset, 1 - c.y / 100 + offset]
             })
             const flattenedPositions = positions.flat()
@@ -220,5 +238,7 @@ addPropertyControls(MeshGradient, {
         title: "Animate",
         type: ControlType.Boolean,
         defaultValue: false,
+        enabledTitle: "Yes",
+        disabledTitle: "No",
     },
 })
