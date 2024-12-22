@@ -92,6 +92,7 @@ export default function MeshGradient(props) {
                 void main() {
                     vec2 uv = gl_FragCoord.xy / u_resolution;
                     vec4 color = u_baseColor;
+                    float noiseIntesity = u_noise;
 
                     for (int i = 0; i < ${colors.length}; i++) {
                         vec2 position = u_positions[i];
@@ -100,7 +101,7 @@ export default function MeshGradient(props) {
                         // Gaussian weights for blending
                         for (float dx = -2.0; dx <= 2.0; dx++) {
                             for (float dy = -2.0; dy <= 2.0; dy++) {
-                                float noise = psrdnoise(uv * u_noise, vec2(10.0, 10.0), 0.0).x; // Apply noise
+                                float noise = psrdnoise(uv * noiseIntesity, vec2(10.0, 10.0), 0.0).x; // Apply noise
                                 vec2 samplePos = position + vec2(dx, dy) * 0.005 + vec2(noise) * 0.01; // Blend noise into position
                                 float dist = distance(uv, samplePos);
                                 float weight = 1.0 - smoothstep(0.1, 0.5, dist);
@@ -156,7 +157,7 @@ export default function MeshGradient(props) {
                     uBaseColor.b / 255,
                     uBaseColor.a,
                 ],
-                u_noise: 0,
+                u_noise: noise,
                 u_colors: new Float32Array(flattenedColors),
                 u_positions: new Float32Array(flattenedPositions),
             }
