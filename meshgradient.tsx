@@ -42,8 +42,8 @@ export default function MeshGradient(props) {
                 uniform float u_noise;
                 uniform vec4 u_colors[${colors.length}];
                 uniform vec2 u_positions[${colors.length}];
+                uniform float u_radius[${colors.length}];
 
-                // Functions for simplex noise (psrdnoise is included here)
                 vec3 mod289(vec3 x) {
                     return x - floor(x * (1.0 / 289.0)) * 289.0;
                 }
@@ -84,31 +84,76 @@ export default function MeshGradient(props) {
                     return 11.0 * vec3(dot(t4, w));
                 }
 
-                // Color blending and randomness
                 vec4 blendAverage(vec4 base, vec4 blend) {
                     return (base + blend) / 2.0;
                 }
 
+                // Elliptical distance calculation
+                float ellipticalDistance(vec2 uv, vec2 center, vec2 radii, float angle) {
+                    vec2 toUV = uv - center;
+
+                    // Rotate UV coordinates by the angle
+                    float cosA = cos(angle);
+                    float sinA = sin(angle);
+                    vec2 rotated = vec2(
+                        cosA * toUV.x + sinA * toUV.y,
+                        -sinA * toUV.x + cosA * toUV.y
+                    );
+
+                    // Scale coordinates to create an ellipse
+                    vec2 scaled = rotated / radii;
+
+                    // Return the distance in elliptical space
+                    return length(scaled);
+                }
+
+
                 void main() {
                     vec2 uv = gl_FragCoord.xy / u_resolution;
                     vec4 color = u_baseColor;
-                    float noiseIntesity = u_noise;
+                    float noiseIntensity = u_noise;
+                    vec2 canvasCenter = vec2(0.5, 0.5);
 
                     for (int i = 0; i < ${colors.length}; i++) {
                         vec2 position = u_positions[i];
                         vec4 gradientColor = u_colors[i];
+                        float radius = u_radius[i];
 
-                        // Gaussian weights for blending
+                        // Calculate the angle pointing towards the center
+                        vec2 toCenter = canvasCenter - position;
+                        toCenter.y = -toCenter.y;
+                        float angle = atan(toCenter.x, toCenter.y);
+
+                        // Gaussian weights for blending with elliptical distortion
                         for (float dx = -2.0; dx <= 2.0; dx++) {
                             for (float dy = -2.0; dy <= 2.0; dy++) {
-                                float noise = psrdnoise(uv * noiseIntesity, vec2(10.0, 10.0), 0.0).x; // Apply noise
-                                vec2 samplePos = position + vec2(dx, dy) * 0.005 + vec2(noise) * 0.01; // Blend noise into position
-                                float dist = distance(uv, samplePos);
-                                float weight = 1.0 - smoothstep(0.1, 0.5, dist);
-                                color = mix(color, blendAverage(color, gradientColor), weight * 0.05);
+                                float noise = psrdnoise(uv * noiseIntensity, vec2(10.0, 10.0), 0.0).x;
+                                vec2 samplePos = position + vec2(dx, dy) * 0.005 + vec2(noise) * 0.01;
+
+                                // vec2 radii = vec2(
+                                //     mix(0.6, 1.0, 1.0 - (abs(toCenter.y) * 0.8) - (abs(toCenter.x) * 0.8)), // X-axis elongation
+                                //     mix(1.5, 1.0, 1.0 - (abs(toCenter.y) * 0.5) - (abs(toCenter.x) * 0.5))
+                                // );
+
+                                vec2 radii = vec2(
+                                    radius, radius
+                                );
+
+                                float eDist = ellipticalDistance(uv, samplePos, radii, angle);
+                                float dist;
+                                if (eDist > 0.0) {
+                                    dist = eDist;
+                                } else {
+                                    dist = distance(uv, position);
+                                }
+
+                                // float dist = distance(uv, position);
+                                float weight = 1.0 - smoothstep(0.001, 0.5, dist);
+                                color = mix(color, blendAverage(color, gradientColor), weight * 0.1);
                             }
                         }
                     }
+
 
                     gl_FragColor = color;
                 }
@@ -149,6 +194,11 @@ export default function MeshGradient(props) {
             })
             const flattenedPositions = positions.flat()
 
+            const radii = colors.map((c) => {
+                return c.radius / 10
+            })
+            const flattenedRadii = radii.flat()
+
             const uniforms = {
                 u_resolution: [gl.canvas.width, gl.canvas.height],
                 u_baseColor: [
@@ -160,12 +210,17 @@ export default function MeshGradient(props) {
                 u_noise: noise,
                 u_colors: new Float32Array(flattenedColors),
                 u_positions: new Float32Array(flattenedPositions),
+                u_radius: new Float32Array(flattenedRadii),
             }
 
             gl.useProgram(programInfo.program)
+            console.log(programInfo.program)
             setBuffersAndAttributes(gl, programInfo, bufferInfo)
             setUniforms(programInfo, uniforms)
             drawBufferInfo(gl, bufferInfo)
+            const pixels = new Uint8Array(
+                gl.canvas.width * gl.canvas.height * 4
+            )
 
             requestAnimationFrame(render)
         }
@@ -205,9 +260,9 @@ MeshGradient.defaultProps = {
     baseColor: "#FFFFFF",
     noise: 10,
     colors: [
-        { color: "#FF0000", x: 20, y: 20 },
-        { color: "#00FF00", x: 80, y: 20 },
-        { color: "#0000FF", x: 50, y: 80 },
+        { color: "#FF0000", x: 0, y: 0, radius: 10 },
+        { color: "#00FF00", x: 80, y: 20, radius: 10 },
+        { color: "#0000FF", x: 50, y: 50, radius: 10 },
     ],
     animate: false,
 }
@@ -250,6 +305,13 @@ addPropertyControls(MeshGradient, {
                     min: 0,
                     max: 100,
                     defaultValue: 50,
+                },
+                radius: {
+                    title: "Radius",
+                    type: ControlType.Number,
+                    min: 0,
+                    max: 100,
+                    defaultValue: 10,
                 },
             },
         },
