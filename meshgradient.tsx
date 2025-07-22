@@ -10,12 +10,22 @@ import {
 } from "twgl.js"
 
 /** @framerDisableUnlink
- * @framerSupportedLayoutWidth any
- * @framerSupportedLayoutHeight any
+ * @framerSupportedLayoutWidth any-prefer-fixed
+ * @framerSupportedLayoutHeight any-prefer-fixed
+ * @framerIntrinsicWidth 200
+ * @framerIntrinsicHeight 200
  */
 
 export default function MeshGradient(props) {
-    const { baseColor, noise, colors, animate } = props
+    const { baseColor, noise, animate } = props
+    const colors =
+        props.colors.length !== 0
+            ? props.colors
+            : [
+                  { color: "rgb(255,0,0)", x: 0, y: 0, radius: 10 },
+                  { color: "rgb(0,255,0)", x: 80, y: 20, radius: 10 },
+                  { color: "rgb(0,0,255)", x: 50, y: 50, radius: 10 },
+              ]
 
     const canvasRef = (element: HTMLCanvasElement) => {
         if (!element) return
@@ -40,9 +50,11 @@ export default function MeshGradient(props) {
                 uniform vec2 u_resolution;
                 uniform vec4 u_baseColor; // Background color with alpha
                 uniform float u_noise;
-                uniform vec4 u_colors[${colors.length}];
-                uniform vec2 u_positions[${colors.length}];
-                uniform float u_radius[${colors.length}];
+                uniform vec4 u_colors[${Math.max(1, colors.length)}];
+                uniform vec2 u_positions[${Math.max(1, colors.length)}];
+                uniform float u_radius[${Math.max(1, colors.length)}];
+                uniform float u_time;
+
 
                 vec3 mod289(vec3 x) {
                     return x - floor(x * (1.0 / 289.0)) * 289.0;
@@ -57,6 +69,16 @@ export default function MeshGradient(props) {
                     float u = permute(permute(p.x) + p.y) * 0.0243902439 + rot;
                     u = fract(u) * 6.28318530718; // 2*pi
                     return vec2(cos(u), sin(u));
+                }
+                float grainNoise(vec2 uv) {
+                    vec2 pixel = floor(uv * u_resolution); // lock to actual pixel grid
+                    float hash = dot(pixel, vec2(12.9898, 78.233));
+                    return fract(sin(hash) * 43758.5453123);
+                }
+                float bigGrainNoise(vec2 uv, float scale) {
+                    vec2 blockUV = floor(uv * u_resolution / scale);
+                    float hash = dot(blockUV + u_time * 0.02, vec2(127.1, 311.7));
+                    return fract(sin(hash) * 43758.5453123);
                 }
                 vec3 psrdnoise(vec2 pos, vec2 per, float rot) {
                     pos.y += 0.01;
@@ -114,7 +136,7 @@ export default function MeshGradient(props) {
                     float noiseIntensity = u_noise;
                     vec2 canvasCenter = vec2(0.5, 0.5);
 
-                    for (int i = 0; i < ${colors.length}; i++) {
+                    for (int i = 0; i < ${Math.max(1, colors.length)}; i++) {
                         vec2 position = u_positions[i];
                         vec4 gradientColor = u_colors[i];
                         float radius = u_radius[i];
@@ -127,13 +149,10 @@ export default function MeshGradient(props) {
                         // Gaussian weights for blending with elliptical distortion
                         for (float dx = -2.0; dx <= 2.0; dx++) {
                             for (float dy = -2.0; dy <= 2.0; dy++) {
+                                // float grain = bigGrainNoise(uv * noiseIntensity, 40.0);
+                                // vec2 samplePos = position + vec2(dx, dy) * 0.005 + (grain - 0.5) * 0.02;
                                 float noise = psrdnoise(uv * noiseIntensity, vec2(10.0, 10.0), 0.0).x;
                                 vec2 samplePos = position + vec2(dx, dy) * 0.005 + vec2(noise) * 0.01;
-
-                                // vec2 radii = vec2(
-                                //     mix(0.6, 1.0, 1.0 - (abs(toCenter.y) * 0.8) - (abs(toCenter.x) * 0.8)), // X-axis elongation
-                                //     mix(1.5, 1.0, 1.0 - (abs(toCenter.y) * 0.5) - (abs(toCenter.x) * 0.5))
-                                // );
 
                                 vec2 radii = vec2(
                                     radius, radius
@@ -178,11 +197,11 @@ export default function MeshGradient(props) {
             resizeCanvasToDisplaySize(gl.canvas as HTMLCanvasElement)
             gl.viewport(0, 0, gl.canvas.width, gl.canvas.height)
 
-            const uBaseColor = parseRgbaString(baseColor)
+            const uBaseColor = parseColorString(baseColor)
 
             // Parse gradient colors
             const colorArray = colors.map((c) => {
-                const rgba = parseRgbaString(c.color)
+                const rgba = parseColorString(c.color)
                 return [rgba.r / 255, rgba.g / 255, rgba.b / 255, rgba.a]
             })
             const flattenedColors = colorArray.flat()
@@ -211,10 +230,10 @@ export default function MeshGradient(props) {
                 u_colors: new Float32Array(flattenedColors),
                 u_positions: new Float32Array(flattenedPositions),
                 u_radius: new Float32Array(flattenedRadii),
+                u_time: animate ? time * 0.001 : 1,
             }
 
             gl.useProgram(programInfo.program)
-            console.log(programInfo.program)
             setBuffersAndAttributes(gl, programInfo, bufferInfo)
             setUniforms(programInfo, uniforms)
             drawBufferInfo(gl, bufferInfo)
@@ -240,31 +259,75 @@ export default function MeshGradient(props) {
     )
 }
 
-function parseRgbaString(rgbaString) {
-    const match = rgbaString.match(
-        /rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([01](?:\.\d+)?))?\)/
-    )
-    if (!match) {
-        console.error(`Invalid color string: ${rgbaString}`)
+function hexToRgba(hex) {
+    // Remove '#' if present
+    hex = hex.replace(/^#/, "")
+
+    // Parse RGB values
+    let r,
+        g,
+        b,
+        a = 255 // Default alpha to 255 (fully opaque)
+
+    if (hex.length === 3 || hex.length === 4) {
+        // Shorthand hex format (#RGB or #RGBA)
+        r = parseInt(hex[0] + hex[0], 16)
+        g = parseInt(hex[1] + hex[1], 16)
+        b = parseInt(hex[2] + hex[2], 16)
+        if (hex.length === 4) {
+            a = parseInt(hex[3] + hex[3], 16)
+        }
+    } else if (hex.length === 6 || hex.length === 8) {
+        // Full hex format (#RRGGBB or #RRGGBBAA)
+        r = parseInt(hex.substring(0, 2), 16)
+        g = parseInt(hex.substring(2, 4), 16)
+        b = parseInt(hex.substring(4, 6), 16)
+        if (hex.length === 8) {
+            a = parseInt(hex.substring(6, 8), 16)
+        }
+    } else {
+        console.error(`Invalid HEX color: ${hex}`)
         return { r: 0, g: 0, b: 0, a: 1 }
     }
-    return {
-        r: parseInt(match[1], 10),
-        g: parseInt(match[2], 10),
-        b: parseInt(match[3], 10),
-        a: match[4] !== undefined ? parseFloat(match[4]) : 1,
-    }
+
+    // Convert alpha from 0-255 to 0-1 range
+    return { r, g, b, a: a / 255 }
 }
 
-MeshGradient.defaultProps = {
-    baseColor: "#FFFFFF",
-    noise: 10,
-    colors: [
-        { color: "#FF0000", x: 0, y: 0, radius: 10 },
-        { color: "#00FF00", x: 80, y: 20, radius: 10 },
-        { color: "#0000FF", x: 50, y: 50, radius: 10 },
-    ],
-    animate: false,
+function parseColorString(colorString) {
+    if (colorString.startsWith("#")) {
+        // Hex color
+        let hex = colorString.replace("#", "")
+        if (hex.length === 3) {
+            hex = hex
+                .split("")
+                .map((c) => c + c)
+                .join("") // expand short hex
+        }
+        if (hex.length !== 6) {
+            console.error(`Invalid hex color string: ${colorString}`)
+            return { r: 0, g: 0, b: 0, a: 1 }
+        }
+        const r = parseInt(hex.slice(0, 2), 16)
+        const g = parseInt(hex.slice(2, 4), 16)
+        const b = parseInt(hex.slice(4, 6), 16)
+        return { r, g, b, a: 1 }
+    } else {
+        // rgb or rgba
+        const match = colorString.match(
+            /rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([01](?:\.\d+)?))?\)/
+        )
+        if (!match) {
+            console.error(`Invalid color string: ${colorString}`)
+            return { r: 0, g: 0, b: 0, a: 1 }
+        }
+        return {
+            r: parseInt(match[1], 10),
+            g: parseInt(match[2], 10),
+            b: parseInt(match[3], 10),
+            a: match[4] !== undefined ? parseFloat(match[4]) : 1,
+        }
+    }
 }
 
 addPropertyControls(MeshGradient, {
@@ -283,6 +346,11 @@ addPropertyControls(MeshGradient, {
     colors: {
         title: "Colors",
         type: ControlType.Array,
+        defaultValue: [
+            { color: "#FF0000", x: 0, y: 0, radius: 10 },
+            { color: "#00FF00", x: 80, y: 20, radius: 10 },
+            { color: "#0000FF", x: 50, y: 50, radius: 10 },
+        ],
         propertyControl: {
             title: "Mesh Color",
             type: ControlType.Object,
@@ -324,3 +392,14 @@ addPropertyControls(MeshGradient, {
         disabledTitle: "No",
     },
 })
+
+MeshGradient.defaultProps = {
+    baseColor: "#FFFFFF",
+    noise: 10,
+    colors: [
+        { color: "rgb(255,0,0)", x: 0, y: 0, radius: 10 },
+        { color: "rgb(0,255,0)", x: 80, y: 20, radius: 10 },
+        { color: "rgb(0,0,255)", x: 50, y: 50, radius: 10 },
+    ],
+    animate: false,
+}
