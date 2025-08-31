@@ -3,14 +3,6 @@
 import React, { useRef, useEffect } from "react";
 import chroma from "chroma-js";
 import * as twgl from "twgl.js";
-// import {
-//     createBufferInfoFromArrays,
-//     createProgramInfo,
-//     drawBufferInfo,
-//     resizeCanvasToDisplaySize,
-//     setBuffersAndAttributes,
-//     setUniforms,
-// } from "twgl.js";
 
 // Type definitions for the gradient color stops
 export interface MeshGradientColor {
