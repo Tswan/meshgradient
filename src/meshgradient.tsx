@@ -1,89 +1,107 @@
-import { addPropertyControls, ControlType } from "framer"
-import React, { useRef, useEffect } from "react"
-import chroma from "chroma-js"
-import {
-    createBufferInfoFromArrays,
-    createProgramInfo,
-    drawBufferInfo,
-    resizeCanvasToDisplaySize,
-    setBuffersAndAttributes,
-    setUniforms,
-} from "twgl.js"
+// src/MeshGradient.tsx
 
-/** @framerDisableUnlink
- * @framerSupportedLayoutWidth any-prefer-fixed
- * @framerSupportedLayoutHeight any-prefer-fixed
- * @framerIntrinsicWidth 200
- * @framerIntrinsicHeight 200
+import React, { useRef, useEffect } from "react";
+import chroma from "chroma-js";
+import * as twgl from "twgl.js";
+// import {
+//     createBufferInfoFromArrays,
+//     createProgramInfo,
+//     drawBufferInfo,
+//     resizeCanvasToDisplaySize,
+//     setBuffersAndAttributes,
+//     setUniforms,
+// } from "twgl.js";
+
+// Type definitions for the gradient color stops
+export interface MeshGradientColor {
+    color: string;
+    x: number;
+    y: number;
+    radius: number;
+}
+
+export interface MeshGradientProps {
+    baseColor?: string;
+    noise?: number;
+    colors?: MeshGradientColor[];
+    animate?: boolean;
+    style?: React.CSSProperties;
+    className?: string;
+}
+
+/**
+ * MeshGradient React component
+ * Renders a mesh gradient using WebGL and TWGL.js
  */
-
-export default function MeshGradient(props) {
-    const { baseColor, noise, animate } = props
-    const colors =
-        props.colors.length !== 0
-            ? props.colors
-            : [
-                  { color: "rgb(255,0,0)", x: 0, y: 0, radius: 10 },
-                  { color: "rgb(0,255,0)", x: 80, y: 20, radius: 10 },
-                  { color: "rgb(0,0,255)", x: 50, y: 50, radius: 10 },
-              ]
-    const canvasRef = useRef<HTMLCanvasElement | null>(null)
-    const rafId = useRef<number | null>(null)
+const MeshGradient: React.FC<MeshGradientProps> = ({
+    baseColor = "#FFFFFF",
+    noise = 10,
+    colors = [
+        { color: "rgb(255,0,0)", x: 0, y: 0, radius: 10 },
+        { color: "rgb(0,255,0)", x: 80, y: 20, radius: 10 },
+        { color: "rgb(0,0,255)", x: 50, y: 50, radius: 10 },
+    ],
+    animate = false,
+    style,
+    className,
+}) => {
+    const canvasRef = useRef<HTMLCanvasElement | null>(null);
+    const rafId = useRef<number | null>(null);
 
     useEffect(() => {
-        const canvas = canvasRef.current
-        if (!canvas) return
+        const canvas = canvasRef.current;
+        if (!canvas) return;
 
-        const gl = canvas.getContext("webgl")
+        const gl = canvas.getContext("webgl");
         if (!gl) {
-            console.error("WebGL not supported.")
-            return
+            console.error("WebGL not supported.");
+            return;
         }
 
-        const vertexShaderSource = `attribute vec4 position; void main() { gl_Position = position; }`
-        const fragmentShaderSource = generateFragmentShader(colors.length)
+        const vertexShaderSource = `attribute vec4 position; void main() { gl_Position = position; }`;
+        const fragmentShaderSource = generateFragmentShader(colors.length);
 
-        const programInfo = createProgramInfo(gl, [
+        const programInfo = twgl.createProgramInfo(gl, [
             vertexShaderSource,
             fragmentShaderSource,
-        ])
+        ]);
         const arrays = {
             position: [
                 -1, -1, 0, 1, -1, 0, -1, 1, 0, -1, 1, 0, 1, -1, 0, 1, 1, 0,
             ],
-        }
-        const bufferInfo = createBufferInfoFromArrays(gl, arrays)
+        };
+        const bufferInfo = twgl.createBufferInfoFromArrays(gl, arrays);
 
         const draw = (time: number) => {
-            resizeCanvasToDisplaySize(gl.canvas as HTMLCanvasElement)
-            gl.viewport(0, 0, gl.canvas.width, gl.canvas.height)
+            twgl.resizeCanvasToDisplaySize(gl.canvas as HTMLCanvasElement);
+            gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
 
-            const chromaColor = chroma(baseColor).gl()
+            const chromaColor = chroma(baseColor).gl();
 
             const uBaseColor = {
                 r: chromaColor[0],
                 g: chromaColor[1],
                 b: chromaColor[2],
                 a: chromaColor[3],
-            }
+            };
 
             const colorArray = colors
                 .map((c) => {
-                    const rgba = chroma(c.color).gl()
-                    return [rgba[0], rgba[1], rgba[2], rgba[3]]
+                    const rgba = chroma(c.color).gl();
+                    return [rgba[0], rgba[1], rgba[2], rgba[3]];
                 })
-                .flat()
+                .flat();
 
             const positions = colors
                 .map((c, i) => {
                     const offset = animate
                         ? Math.sin(time * 0.001 + i) * 0.1
-                        : 0
-                    return [c.x / 100 + offset, 1 - c.y / 100 + offset]
+                        : 0;
+                    return [c.x / 100 + offset, 1 - c.y / 100 + offset];
                 })
-                .flat()
+                .flat();
 
-            const radii = colors.map((c) => c.radius / 10)
+            const radii = colors.map((c) => c.radius / 10);
 
             const uniforms = {
                 u_resolution: [gl.canvas.width, gl.canvas.height],
@@ -98,30 +116,38 @@ export default function MeshGradient(props) {
                 u_positions: new Float32Array(positions),
                 u_radius: new Float32Array(radii),
                 u_time: animate ? time * 0.001 : 1,
-            }
+            };
 
-            gl.useProgram(programInfo.program)
-            setBuffersAndAttributes(gl, programInfo, bufferInfo)
-            setUniforms(programInfo, uniforms)
-            drawBufferInfo(gl, bufferInfo)
+            gl.useProgram(programInfo.program);
+            twgl.setBuffersAndAttributes(gl, programInfo, bufferInfo);
+            twgl.setUniforms(programInfo, uniforms);
+            twgl.drawBufferInfo(gl, bufferInfo);
 
-            if (animate) rafId.current = requestAnimationFrame(draw)
-        }
+            if (animate) rafId.current = requestAnimationFrame(draw);
+        };
 
-        draw(0) // Render once or start animating
+        draw(0); // Render once or start animating
 
         return () => {
-            if (rafId.current) cancelAnimationFrame(rafId.current)
-        }
-    }, [baseColor, noise, animate, JSON.stringify(colors)])
+            if (rafId.current) cancelAnimationFrame(rafId.current);
+        };
+    }, [baseColor, noise, animate, JSON.stringify(colors)]);
 
     return (
         <canvas
             ref={canvasRef}
-            style={{ width: "100%", height: "100%", display: "block" }}
+            style={{
+                width: "100%",
+                height: "100%",
+                display: "block",
+                ...style,
+            }}
+            className={className}
         />
-    )
-}
+    );
+};
+
+export default MeshGradient;
 
 // ---------- Shader generation ----------
 function generateFragmentShader(count: number) {
@@ -220,80 +246,5 @@ function generateFragmentShader(count: number) {
             }
             gl_FragColor = color;
         }
-    `
-}
-
-// ---------- Framer controls ----------
-addPropertyControls(MeshGradient, {
-    baseColor: {
-        title: "Base Color",
-        type: ControlType.Color,
-        defaultValue: "#FFFFFF",
-    },
-    noise: {
-        title: "Noise",
-        type: ControlType.Number,
-        min: 0,
-        max: 100,
-        defaultValue: 10,
-    },
-    colors: {
-        title: "Colors",
-        type: ControlType.Array,
-        defaultValue: [
-            { color: "#FF0000", x: 0, y: 0, radius: 10 },
-            { color: "#00FF00", x: 80, y: 20, radius: 10 },
-            { color: "#0000FF", x: 50, y: 50, radius: 10 },
-        ],
-        propertyControl: {
-            title: "Mesh Color",
-            type: ControlType.Object,
-            controls: {
-                color: {
-                    title: "Color",
-                    type: ControlType.Color,
-                    defaultValue: "#FFF",
-                },
-                x: {
-                    title: "X Position",
-                    type: ControlType.Number,
-                    min: 0,
-                    max: 100,
-                    defaultValue: 50,
-                },
-                y: {
-                    title: "Y Position",
-                    type: ControlType.Number,
-                    min: 0,
-                    max: 100,
-                    defaultValue: 50,
-                },
-                radius: {
-                    title: "Radius",
-                    type: ControlType.Number,
-                    min: 0,
-                    max: 100,
-                    defaultValue: 10,
-                },
-            },
-        },
-    },
-    animate: {
-        title: "Animate",
-        type: ControlType.Boolean,
-        defaultValue: false,
-        enabledTitle: "Yes",
-        disabledTitle: "No",
-    },
-})
-
-MeshGradient.defaultProps = {
-    baseColor: "#FFFFFF",
-    noise: 10,
-    colors: [
-        { color: "rgb(255,0,0)", x: 0, y: 0, radius: 10 },
-        { color: "rgb(0,255,0)", x: 80, y: 20, radius: 10 },
-        { color: "rgb(0,0,255)", x: 50, y: 50, radius: 10 },
-    ],
-    animate: false,
+    `;
 }
