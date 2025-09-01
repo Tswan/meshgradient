@@ -1,7 +1,6 @@
 {
   "name": "mesh-gradient",
   "version": "1.0.0",
-  "private": true,
   "description": "Use WebGL radial gradients to create Mesh Gradient effects.",
   "main": "dist/meshgradient.js",
   "types": "dist/meshgradient.d.ts",
@@ -17,9 +16,6 @@
   "dependencies": {
     "chroma-js": "^2.6.0",
     "twgl.js": "^4.24.0"
-  },
-  "publishConfig": {
-    "access": "restricted"
   },
   "keywords": [
     "webgl",
