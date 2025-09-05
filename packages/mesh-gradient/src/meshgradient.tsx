@@ -64,6 +64,9 @@ const MeshGradient: React.FC<MeshGradientProps> = ({
         };
         const bufferInfo = twgl.createBufferInfoFromArrays(gl, arrays);
 
+        const u_positions = new Float32Array(colors.length * 2);
+        const u_radius = new Float32Array(colors.length);
+
         const draw = (time: number) => {
             twgl.resizeCanvasToDisplaySize(gl.canvas as HTMLCanvasElement);
             gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
@@ -83,6 +86,13 @@ const MeshGradient: React.FC<MeshGradientProps> = ({
                     return [rgba[0], rgba[1], rgba[2], rgba[3]];
                 })
                 .flat();
+
+            for (let i = 0; i < colors.length; i++) {
+                const offset = animate ? Math.sin(time * 0.001 + i) * 0.1 : 0;
+                u_positions[i * 2] = colors[i].x / 100 + offset;
+                u_positions[i * 2 + 1] = 1 - colors[i].y / 100 + offset;
+                u_radius[i] = colors[i].radius / 10;
+            }
 
             const positions = colors
                 .map((c, i) => {
@@ -105,8 +115,8 @@ const MeshGradient: React.FC<MeshGradientProps> = ({
                 ],
                 u_noise: noise,
                 u_colors: new Float32Array(colorArray),
-                u_positions: new Float32Array(positions),
-                u_radius: new Float32Array(radii),
+                u_positions: u_positions,
+                u_radius: u_radius,
                 u_time: animate ? time * 0.001 : 1,
             };
 
@@ -194,6 +204,57 @@ function generateFragmentShader(count: number) {
             return 11.0 * vec3(dot(t4, w));
         }
 
+        // Simple hash function for pseudo-random numbers
+        float hash(vec2 p) {
+            vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+            p3 += dot(p3, p3.yzx + 19.19);
+            return fract((p3.x + p3.y) * p3.z);
+        }
+
+        float hash2D(vec2 p) {
+            // a better decorrelated hash
+            return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+        }
+        
+        // Grainy noise function - produces random, pixelated noise
+        float grainNoise(vec2 pos, float scale) {
+            vec2 i = floor(pos * scale);
+            return hash(i) * 2.0 - 1.0; // Output range: -1 to 1
+        }
+        
+        // Multi-octave grainy noise for more interesting patterns
+        float grainNoiseOctaves(vec2 pos, float scale, int octaves) {
+            float noise = 0.0;
+            float amplitude = 1.0;
+            float frequency = scale;
+            float maxValue = 0.0;
+            
+            for (int i = 0; i < 4; i++) {
+                if (i >= octaves) break;
+                noise += grainNoise(pos, frequency) * amplitude;
+                maxValue += amplitude;
+                amplitude *= 0.5;
+                frequency *= 2.0; //20.0;
+            }
+            
+            return noise / maxValue;
+        }
+
+        float bigGrainNoise(vec2 uv, float scale) {
+            vec2 blockUV = floor(uv * u_resolution / scale);
+
+            // Add some motion to UV so grains "wobble" instead of just flicker
+            vec2 animatedUV = blockUV + vec2(
+                sin(u_time * 0.7),
+                cos(u_time * 1.3)
+            ) * 0.5;
+
+            float n = fract(sin(dot(animatedUV, vec2(127.1, 311.7)) + u_time * 20.0) * 43758.5453);
+
+            return step(0.5, n);
+        }
+
+
         vec4 blendAverage(vec4 base, vec4 blend) {
             return (base + blend) / 2.0;
         }
@@ -227,8 +288,9 @@ function generateFragmentShader(count: number) {
                 float angle = atan(toCenter.x, toCenter.y);
                 for (float dx = -2.0; dx <= 2.0; dx++) {
                     for (float dy = -2.0; dy <= 2.0; dy++) {
-                        float noise = psrdnoise(uv * u_noise, vec2(10.0), 0.0).x;
-                        vec2 samplePos = position + vec2(dx, dy) * 0.005 + vec2(noise) * 0.01;
+                        // float noise = grainNoiseOctaves(uv, u_noise, 100);
+                        
+                        vec2 samplePos = position + vec2(dx, dy) * 0.005;
                         float eDist = ellipticalDistance(uv, samplePos, vec2(radius), angle);
                         float dist = eDist > 0.0 ? eDist : distance(uv, position);
                         float weight = 1.0 - smoothstep(0.001, 0.5, dist);
@@ -236,6 +298,8 @@ function generateFragmentShader(count: number) {
                     }
                 }
             }
+            float noise = bigGrainNoise(uv, u_noise);
+            color.rgb += (noise - 0.5) * 0.1; 
             gl_FragColor = color;
         }
     `;
