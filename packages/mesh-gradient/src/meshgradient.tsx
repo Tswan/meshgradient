@@ -12,9 +12,12 @@ export interface MeshGradientColor {
     radius: number;
 }
 
+
+
 export interface MeshGradientProps {
     baseColor?: string;
     noise?: number;
+    noiseIntensity?: number;
     colors?: MeshGradientColor[];
     animate?: boolean;
     style?: React.CSSProperties;
@@ -28,6 +31,7 @@ export interface MeshGradientProps {
 const MeshGradient: React.FC<MeshGradientProps> = ({
     baseColor = "#FFFFFF",
     noise = 10,
+    noiseIntensity = 1,
     colors = [
         { color: "rgb(255,0,0)", x: 0, y: 0, radius: 10 },
         { color: "rgb(0,255,0)", x: 80, y: 20, radius: 10 },
@@ -114,6 +118,7 @@ const MeshGradient: React.FC<MeshGradientProps> = ({
                     uBaseColor.a,
                 ],
                 u_noise: noise,
+                u_noiseIntensity: noiseIntensity / 100,
                 u_colors: new Float32Array(colorArray),
                 u_positions: u_positions,
                 u_radius: u_radius,
@@ -159,6 +164,7 @@ function generateFragmentShader(count: number) {
         uniform vec2 u_resolution;
         uniform vec4 u_baseColor;
         uniform float u_noise;
+        uniform float u_noiseIntensity;
         uniform vec4 u_colors[${Math.max(1, count)}];
         uniform vec2 u_positions[${Math.max(1, count)}];
         uniform float u_radius[${Math.max(1, count)}];
@@ -216,6 +222,12 @@ function generateFragmentShader(count: number) {
             return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
         }
         
+        float hash3D(vec3 p) {
+            p = fract(p * 0.1031);
+            p += dot(p, p.yzx + 19.19);
+            return fract((p.x + p.y) * p.z);
+        }
+        
         // Grainy noise function - produces random, pixelated noise
         float grainNoise(vec2 pos, float scale) {
             vec2 i = floor(pos * scale);
@@ -242,15 +254,7 @@ function generateFragmentShader(count: number) {
 
         float bigGrainNoise(vec2 uv, float scale) {
             vec2 blockUV = floor(uv * u_resolution / scale);
-
-            // Add some motion to UV so grains "wobble" instead of just flicker
-            vec2 animatedUV = blockUV + vec2(
-                sin(u_time * 0.7),
-                cos(u_time * 1.3)
-            ) * 0.5;
-
-            float n = fract(sin(dot(animatedUV, vec2(127.1, 311.7)) + u_time * 20.0) * 43758.5453);
-
+            float n = hash3D(vec3(blockUV, floor(u_time * 60.0)));
             return step(0.5, n);
         }
 
@@ -299,7 +303,7 @@ function generateFragmentShader(count: number) {
                 }
             }
             float noise = bigGrainNoise(uv, u_noise);
-            color.rgb += (noise - 0.5) * 0.1; 
+            color.rgb += (noise - 0.5) * u_noiseIntensity; 
             gl_FragColor = color;
         }
     `;
