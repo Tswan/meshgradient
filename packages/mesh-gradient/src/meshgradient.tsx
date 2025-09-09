@@ -12,10 +12,15 @@ export interface MeshGradientColor {
     radius: number;
 }
 
-
+// Noise type definitions
+export enum NoiseType {
+    GRAINY = "grainy",
+    PERLIN = "perlin"
+}
 
 export interface MeshGradientProps {
     baseColor?: string;
+    noiseType?: NoiseType;
     noise?: number;
     noiseIntensity?: number;
     colors?: MeshGradientColor[];
@@ -30,6 +35,7 @@ export interface MeshGradientProps {
  */
 const MeshGradient: React.FC<MeshGradientProps> = ({
     baseColor = "#FFFFFF",
+    noiseType = NoiseType.PERLIN,
     noise = 10,
     noiseIntensity = 1,
     colors = [
@@ -55,7 +61,7 @@ const MeshGradient: React.FC<MeshGradientProps> = ({
         }
 
         const vertexShaderSource = `attribute vec4 position; void main() { gl_Position = position; }`;
-        const fragmentShaderSource = generateFragmentShader(colors.length);
+        const fragmentShaderSource = generateFragmentShader(colors.length, noiseType);
 
         const programInfo = twgl.createProgramInfo(gl, [
             vertexShaderSource,
@@ -119,6 +125,7 @@ const MeshGradient: React.FC<MeshGradientProps> = ({
                 ],
                 u_noise: noise,
                 u_noiseIntensity: noiseIntensity / 100,
+                u_noiseType: noiseType === NoiseType.PERLIN ? 1 : 0,
                 u_colors: new Float32Array(colorArray),
                 u_positions: u_positions,
                 u_radius: u_radius,
@@ -138,7 +145,7 @@ const MeshGradient: React.FC<MeshGradientProps> = ({
         return () => {
             if (rafId.current) cancelAnimationFrame(rafId.current);
         };
-    }, [baseColor, noise, animate, JSON.stringify(colors)]);
+    }, [baseColor, noiseType, noise, noiseIntensity, animate, JSON.stringify(colors)]);
 
     return (
         <canvas
@@ -157,7 +164,7 @@ const MeshGradient: React.FC<MeshGradientProps> = ({
 export default MeshGradient;
 
 // ---------- Shader generation ----------
-function generateFragmentShader(count: number) {
+function generateFragmentShader(count: number, noiseType: NoiseType) {
     return `
         precision mediump float;
 
@@ -165,11 +172,13 @@ function generateFragmentShader(count: number) {
         uniform vec4 u_baseColor;
         uniform float u_noise;
         uniform float u_noiseIntensity;
+        uniform int u_noiseType; // 0 = grainy, 1 = perlin
         uniform vec4 u_colors[${Math.max(1, count)}];
         uniform vec2 u_positions[${Math.max(1, count)}];
         uniform float u_radius[${Math.max(1, count)}];
         uniform float u_time;
 
+        // Noise utility functions
         vec3 mod289(vec3 x) {
             return x - floor(x * (1.0 / 289.0)) * 289.0;
         }
@@ -227,37 +236,12 @@ function generateFragmentShader(count: number) {
             p += dot(p, p.yzx + 19.19);
             return fract((p.x + p.y) * p.z);
         }
-        
-        // Grainy noise function - produces random, pixelated noise
-        float grainNoise(vec2 pos, float scale) {
-            vec2 i = floor(pos * scale);
-            return hash(i) * 2.0 - 1.0; // Output range: -1 to 1
-        }
-        
-        // Multi-octave grainy noise for more interesting patterns
-        float grainNoiseOctaves(vec2 pos, float scale, int octaves) {
-            float noise = 0.0;
-            float amplitude = 1.0;
-            float frequency = scale;
-            float maxValue = 0.0;
-            
-            for (int i = 0; i < 4; i++) {
-                if (i >= octaves) break;
-                noise += grainNoise(pos, frequency) * amplitude;
-                maxValue += amplitude;
-                amplitude *= 0.5;
-                frequency *= 2.0; //20.0;
-            }
-            
-            return noise / maxValue;
-        }
 
         float bigGrainNoise(vec2 uv, float scale) {
             vec2 blockUV = floor(uv * u_resolution / scale);
             float n = hash3D(vec3(blockUV, floor(u_time * 60.0)));
             return step(0.5, n);
         }
-
 
         vec4 blendAverage(vec4 base, vec4 blend) {
             return (base + blend) / 2.0;
@@ -277,10 +261,12 @@ function generateFragmentShader(count: number) {
             // Return the distance in elliptical space
             return length(scaled);
         }
+
         void main() {
             vec2 uv = gl_FragCoord.xy / u_resolution;
             vec4 color = u_baseColor;
             vec2 canvasCenter = vec2(0.5, 0.5);
+
             for (int i = 0; i < ${Math.max(1, count)}; i++) {
                 vec2 position = u_positions[i];
                 vec4 gradientColor = u_colors[i];
@@ -292,9 +278,12 @@ function generateFragmentShader(count: number) {
                 float angle = atan(toCenter.x, toCenter.y);
                 for (float dx = -2.0; dx <= 2.0; dx++) {
                     for (float dy = -2.0; dy <= 2.0; dy++) {
-                        // float noise = grainNoiseOctaves(uv, u_noise, 100);
-                        
-                        vec2 samplePos = position + vec2(dx, dy) * 0.005;
+                        float noiseValue = 0.0;
+                        if (u_noiseType == 1) {
+                            // Perlin noise
+                            noiseValue = psrdnoise(uv * u_noise, vec2(10.0), 0.0).x;
+                        }
+                        vec2 samplePos = position + vec2(dx, dy) * 0.005 + vec2(noiseValue) * 0.01;
                         float eDist = ellipticalDistance(uv, samplePos, vec2(radius), angle);
                         float dist = eDist > 0.0 ? eDist : distance(uv, position);
                         float weight = 1.0 - smoothstep(0.001, 0.5, dist);
@@ -302,8 +291,13 @@ function generateFragmentShader(count: number) {
                     }
                 }
             }
-            float noise = bigGrainNoise(uv, u_noise);
-            color.rgb += (noise - 0.5) * u_noiseIntensity; 
+            
+            // Apply noise based on the selected noise type
+            if (u_noiseType == 0) {
+                // Grainy noise
+                float finalNoise = bigGrainNoise(uv, u_noise);
+                color.rgb += (finalNoise - 0.5) * u_noiseIntensity; 
+            }
             gl_FragColor = color;
         }
     `;
