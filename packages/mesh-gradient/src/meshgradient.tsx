@@ -115,6 +115,14 @@ const MeshGradient: React.FC<MeshGradientProps> = ({
 
             const radii = colors.map((c) => c.radius / 10);
 
+            // Clamp noise value between 0 and 100
+            const clampedNoise = Math.max(0, Math.min(100, noise));
+
+            // For Perlin noise, invert the value so 0 = smallest, 100 = largest
+            const normalizedNoise = noiseType === NoiseType.GRAINY
+                ? (100 - clampedNoise)
+                : clampedNoise;
+
             const uniforms = {
                 u_resolution: [gl.canvas.width, gl.canvas.height],
                 u_baseColor: [
@@ -123,7 +131,7 @@ const MeshGradient: React.FC<MeshGradientProps> = ({
                     uBaseColor.b,
                     uBaseColor.a,
                 ],
-                u_noise: noise,
+                u_noise: normalizedNoise,
                 u_noiseIntensity: noiseIntensity / 100,
                 u_noiseType: noiseType === NoiseType.PERLIN ? 1 : 0,
                 u_colors: new Float32Array(colorArray),
@@ -278,12 +286,14 @@ function generateFragmentShader(count: number, noiseType: NoiseType) {
                 float angle = atan(toCenter.x, toCenter.y);
                 for (float dx = -2.0; dx <= 2.0; dx++) {
                     for (float dy = -2.0; dy <= 2.0; dy++) {
-                        float noiseValue = 0.0;
+                        vec2 samplePos = position + vec2(dx, dy) * 0.005;
+                        
+                        // Apply noise to sample position based on noise type
                         if (u_noiseType == 1) {
-                            // Perlin noise
-                            noiseValue = psrdnoise(uv * u_noise, vec2(10.0), 0.0).x;
+                            float noise = psrdnoise(uv * u_noise, vec2(10.0), 0.0).x;
+                            samplePos += vec2(noise) * 0.01;
                         }
-                        vec2 samplePos = position + vec2(dx, dy) * 0.005 + vec2(noiseValue) * 0.01;
+                        
                         float eDist = ellipticalDistance(uv, samplePos, vec2(radius), angle);
                         float dist = eDist > 0.0 ? eDist : distance(uv, position);
                         float weight = 1.0 - smoothstep(0.001, 0.5, dist);
@@ -294,10 +304,11 @@ function generateFragmentShader(count: number, noiseType: NoiseType) {
             
             // Apply noise based on the selected noise type
             if (u_noiseType == 0) {
-                // Grainy noise
+                // Grainy noise - apply as texture overlay
                 float finalNoise = bigGrainNoise(uv, u_noise);
                 color.rgb += (finalNoise - 0.5) * u_noiseIntensity; 
             }
+            
             gl_FragColor = color;
         }
     `;

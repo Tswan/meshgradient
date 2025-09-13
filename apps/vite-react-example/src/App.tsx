@@ -3,7 +3,7 @@ import reactLogo from './assets/react.svg'
 import viteLogo from '/vite.svg'
 import './App.css'
 import React from "react";
-import MeshGradient from "mesh-gradient"; // or "@your-scope/mesh-gradient"
+import MeshGradient, {NoiseType} from "mesh-gradient";
 
 
 function App() {
@@ -14,7 +14,9 @@ function App() {
       <div style={{ width: 400, height: 400 }}>
         <MeshGradient
           baseColor="#fff"
-          noise={10}
+          noiseType={NoiseType.PERLIN}
+          noise={96}
+          noiseIntensity={3}
           colors={[
             { color: "rgb(255,0,0)", x: 0, y: 0, radius: 10 },
             { color: "rgb(0,255,0)", x: 80, y: 20, radius: 10 },
