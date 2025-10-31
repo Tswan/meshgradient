@@ -12,9 +12,17 @@ export interface MeshGradientColor {
     radius: number;
 }
 
+// Noise type definitions
+export enum NoiseType {
+    GRAINY = "grainy",
+    PERLIN = "perlin"
+}
+
 export interface MeshGradientProps {
     baseColor?: string;
+    noiseType?: NoiseType;
     noise?: number;
+    noiseIntensity?: number;
     colors?: MeshGradientColor[];
     animate?: boolean;
     style?: React.CSSProperties;
@@ -27,7 +35,9 @@ export interface MeshGradientProps {
  */
 const MeshGradient: React.FC<MeshGradientProps> = ({
     baseColor = "#FFFFFF",
+    noiseType = NoiseType.PERLIN,
     noise = 10,
+    noiseIntensity = 1,
     colors = [
         { color: "rgb(255,0,0)", x: 0, y: 0, radius: 10 },
         { color: "rgb(0,255,0)", x: 80, y: 20, radius: 10 },
@@ -51,7 +61,7 @@ const MeshGradient: React.FC<MeshGradientProps> = ({
         }
 
         const vertexShaderSource = `attribute vec4 position; void main() { gl_Position = position; }`;
-        const fragmentShaderSource = generateFragmentShader(colors.length);
+        const fragmentShaderSource = generateFragmentShader(colors.length, noiseType);
 
         const programInfo = twgl.createProgramInfo(gl, [
             vertexShaderSource,
@@ -63,6 +73,9 @@ const MeshGradient: React.FC<MeshGradientProps> = ({
             ],
         };
         const bufferInfo = twgl.createBufferInfoFromArrays(gl, arrays);
+
+        const u_positions = new Float32Array(colors.length * 2);
+        const u_radius = new Float32Array(colors.length);
 
         const draw = (time: number) => {
             twgl.resizeCanvasToDisplaySize(gl.canvas as HTMLCanvasElement);
@@ -84,6 +97,13 @@ const MeshGradient: React.FC<MeshGradientProps> = ({
                 })
                 .flat();
 
+            for (let i = 0; i < colors.length; i++) {
+                const offset = animate ? Math.sin(time * 0.001 + i) * 0.1 : 0;
+                u_positions[i * 2] = colors[i].x / 100 + offset;
+                u_positions[i * 2 + 1] = 1 - colors[i].y / 100 + offset;
+                u_radius[i] = colors[i].radius / 10;
+            }
+
             const positions = colors
                 .map((c, i) => {
                     const offset = animate
@@ -95,6 +115,14 @@ const MeshGradient: React.FC<MeshGradientProps> = ({
 
             const radii = colors.map((c) => c.radius / 10);
 
+            // Clamp noise value between 0 and 100
+            const clampedNoise = Math.max(0, Math.min(100, noise));
+
+            // For Perlin noise, invert the value so 0 = smallest, 100 = largest
+            const normalizedNoise = noiseType === NoiseType.GRAINY
+                ? (100 - clampedNoise)
+                : clampedNoise;
+
             const uniforms = {
                 u_resolution: [gl.canvas.width, gl.canvas.height],
                 u_baseColor: [
@@ -103,10 +131,12 @@ const MeshGradient: React.FC<MeshGradientProps> = ({
                     uBaseColor.b,
                     uBaseColor.a,
                 ],
-                u_noise: noise,
+                u_noise: normalizedNoise,
+                u_noiseIntensity: noiseIntensity / 100,
+                u_noiseType: noiseType === NoiseType.PERLIN ? 1 : 0,
                 u_colors: new Float32Array(colorArray),
-                u_positions: new Float32Array(positions),
-                u_radius: new Float32Array(radii),
+                u_positions: u_positions,
+                u_radius: u_radius,
                 u_time: animate ? time * 0.001 : 1,
             };
 
@@ -123,7 +153,7 @@ const MeshGradient: React.FC<MeshGradientProps> = ({
         return () => {
             if (rafId.current) cancelAnimationFrame(rafId.current);
         };
-    }, [baseColor, noise, animate, JSON.stringify(colors)]);
+    }, [baseColor, noiseType, noise, noiseIntensity, animate, JSON.stringify(colors)]);
 
     return (
         <canvas
@@ -142,18 +172,21 @@ const MeshGradient: React.FC<MeshGradientProps> = ({
 export default MeshGradient;
 
 // ---------- Shader generation ----------
-function generateFragmentShader(count: number) {
+function generateFragmentShader(count: number, noiseType: NoiseType) {
     return `
         precision mediump float;
 
         uniform vec2 u_resolution;
         uniform vec4 u_baseColor;
         uniform float u_noise;
+        uniform float u_noiseIntensity;
+        uniform int u_noiseType; // 0 = grainy, 1 = perlin
         uniform vec4 u_colors[${Math.max(1, count)}];
         uniform vec2 u_positions[${Math.max(1, count)}];
         uniform float u_radius[${Math.max(1, count)}];
         uniform float u_time;
 
+        // Noise utility functions
         vec3 mod289(vec3 x) {
             return x - floor(x * (1.0 / 289.0)) * 289.0;
         }
@@ -194,6 +227,30 @@ function generateFragmentShader(count: number) {
             return 11.0 * vec3(dot(t4, w));
         }
 
+        // Simple hash function for pseudo-random numbers
+        float hash(vec2 p) {
+            vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+            p3 += dot(p3, p3.yzx + 19.19);
+            return fract((p3.x + p3.y) * p3.z);
+        }
+
+        float hash2D(vec2 p) {
+            // a better decorrelated hash
+            return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+        }
+        
+        float hash3D(vec3 p) {
+            p = fract(p * 0.1031);
+            p += dot(p, p.yzx + 19.19);
+            return fract((p.x + p.y) * p.z);
+        }
+
+        float bigGrainNoise(vec2 uv, float scale) {
+            vec2 blockUV = floor(uv * u_resolution / scale);
+            float n = hash3D(vec3(blockUV, floor(u_time * 60.0)));
+            return step(0.5, n);
+        }
+
         vec4 blendAverage(vec4 base, vec4 blend) {
             return (base + blend) / 2.0;
         }
@@ -212,10 +269,12 @@ function generateFragmentShader(count: number) {
             // Return the distance in elliptical space
             return length(scaled);
         }
+
         void main() {
             vec2 uv = gl_FragCoord.xy / u_resolution;
             vec4 color = u_baseColor;
             vec2 canvasCenter = vec2(0.5, 0.5);
+
             for (int i = 0; i < ${Math.max(1, count)}; i++) {
                 vec2 position = u_positions[i];
                 vec4 gradientColor = u_colors[i];
@@ -227,8 +286,14 @@ function generateFragmentShader(count: number) {
                 float angle = atan(toCenter.x, toCenter.y);
                 for (float dx = -2.0; dx <= 2.0; dx++) {
                     for (float dy = -2.0; dy <= 2.0; dy++) {
-                        float noise = psrdnoise(uv * u_noise, vec2(10.0), 0.0).x;
-                        vec2 samplePos = position + vec2(dx, dy) * 0.005 + vec2(noise) * 0.01;
+                        vec2 samplePos = position + vec2(dx, dy) * 0.005;
+                        
+                        // Apply noise to sample position based on noise type
+                        if (u_noiseType == 1) {
+                            float noise = psrdnoise(uv * u_noise, vec2(10.0), 0.0).x;
+                            samplePos += vec2(noise) * 0.01;
+                        }
+                        
                         float eDist = ellipticalDistance(uv, samplePos, vec2(radius), angle);
                         float dist = eDist > 0.0 ? eDist : distance(uv, position);
                         float weight = 1.0 - smoothstep(0.001, 0.5, dist);
@@ -236,6 +301,14 @@ function generateFragmentShader(count: number) {
                     }
                 }
             }
+            
+            // Apply noise based on the selected noise type
+            if (u_noiseType == 0) {
+                // Grainy noise - apply as texture overlay
+                float finalNoise = bigGrainNoise(uv, u_noise);
+                color.rgb += (finalNoise - 0.5) * u_noiseIntensity; 
+            }
+            
             gl_FragColor = color;
         }
     `;
